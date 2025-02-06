@@ -1,0 +1,12 @@
+[package]
+name = "protobuf-nats-service-generator"
+version = "0.1.0"
+authors = ["Brooks Townsend"]
+categories = ["API Bindings"]
+edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/brooksmtownsend/protobuf-nats-service-generator"
+
+[dependencies]
+convert_case = { version = "0.7" }
+prost-build = { version = "0.13", features = ["format"] }
