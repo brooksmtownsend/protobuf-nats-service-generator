@@ -62,8 +62,13 @@ fn get_client_handlers_trait(service: &Service) -> String {
         .iter()
         .map(|method| {
             let function_name = convert_method_to_function(&method.name);
+            // TODO: Support client side streaming
             let input_type = &method.input_type;
-            let output_type = &method.output_type;
+            let output_type = if method.server_streaming {
+                format!("impl ::futures::Future<Output = ::anyhow::Result<::std::pin::Pin<::std::boxed::Box<impl ::futures::Stream<Item = {}>>>>>", method.output_type)
+            } else {
+                format!("impl ::futures::Future<Output = ::anyhow::Result<{}>>", method.output_type)
+            };
             format!(
                 r#"
                 /// Send request [{input_type}], receiving the decoded [{output_type}]
@@ -71,7 +76,7 @@ fn get_client_handlers_trait(service: &Service) -> String {
                 fn {function_name}(
                     &self,
                     _request: {input_type},
-                ) -> impl ::futures::Future<Output = ::anyhow::Result<{output_type}>> + Send;
+                ) -> {output_type} + Send;
             "#
             )
         })
@@ -121,28 +126,52 @@ fn get_client_nats_implementation(service: &Service) -> String {
         .map(|method| {
             let function_name = convert_method_to_function(&method.name);
             let function_subject = convert_method_to_subject(&method.name);
+            // TODO: Support client side streaming
             let input_type = &method.input_type;
-            let output_type = &method.output_type;
-            format!(
-                r#"
-                /// Send request [{input_type}], decode response as [{output_type}]
-                async fn {function_name}(
-                    &self,
-                    request: {input_type},
-                ) -> anyhow::Result<{output_type}> {{
-                    let mut buf = ::bytes::BytesMut::with_capacity(request.encoded_len());
-                    request
-                        .encode(&mut buf)
-                        .context("failed to encode {input_type}")?;
-                    let reply = self
-                        .request(format!("{{}}.{function_subject}", self.subject_prefix().trim_end_matches('.')), buf.into())
-                        .await
-                        .context("failed to send NATS request for {function_name}")?;
-                    // TODO: more error handling on response message
-                    {output_type}::decode(reply.payload).context("failed to decode reply as {output_type}")
-                }}
-            "#
-            )
+            if method.server_streaming {
+                format!(
+                    r#"
+                    /// Send request [{input_type}], decode response as a stream of [{output_type}]
+                    async fn {function_name}(
+                        &self,
+                        request: {input_type},
+                    ) -> ::anyhow::Result<::std::pin::Pin<::std::boxed::Box<impl ::futures::Stream<Item = {output_type}>>>> {{
+                        let mut buf = ::bytes::BytesMut::with_capacity(request.encoded_len());
+                        request
+                            .encode(&mut buf)
+                            .context("failed to encode {input_type}")?;
+                        let inbox = self.new_inbox();
+                        let sub = self.subscribe(inbox.clone()).await?;
+                        self
+                            .publish_with_reply(format!("{{}}.{function_subject}", self.subject_prefix().trim_end_matches('.')), inbox, buf.into())
+                            .await?;
+                        // TODO: provide error logging for failed decodes
+                        let sub = sub.filter_map(|msg| async {{ {output_type}::decode(msg.payload).ok() }});
+
+                        Ok(Box::pin(sub))
+                    }}
+                "#, output_type = method.output_type)
+            } else {
+                format!(
+                    r#"
+                    /// Send request [{input_type}], decode response as [{output_type}]
+                    async fn {function_name}(
+                        &self,
+                        request: {input_type},
+                    ) -> anyhow::Result<{output_type}> {{
+                        let mut buf = ::bytes::BytesMut::with_capacity(request.encoded_len());
+                        request
+                            .encode(&mut buf)
+                            .context("failed to encode {input_type}")?;
+                        let reply = self
+                            .request(format!("{{}}.{function_subject}", self.subject_prefix().trim_end_matches('.')), buf.into())
+                            .await
+                            .context("failed to send NATS request for {function_name}")?;
+                        // TODO: more error handling on response message
+                        {output_type}::decode(reply.payload).context("failed to decode reply as {output_type}")
+                    }}
+                "#, output_type = method.output_type)
+            }
         })
         .collect::<Vec<_>>()
         .join("\n");
@@ -190,15 +219,23 @@ fn get_server_handlers_trait(service: &Service) -> String {
         .map(|method| {
             let function_name = convert_method_to_function(&method.name);
             let method_name = &method.proto_name;
-            let input_type = &method.input_type;
-            let output_type = &method.output_type;
+            let input_type = if method.client_streaming {
+                format!("impl ::futures::Stream<Item = {}>", method.input_type)
+            } else {
+                method.input_type.to_string()
+            };
+            let output_type = if method.server_streaming {
+                format!("impl ::futures::Future<Output = ::anyhow::Result<impl ::futures::Stream<Item = {}>>>", method.output_type)
+            } else {
+                format!("impl ::futures::Future<Output = ::anyhow::Result<{}>>", method.output_type)
+            };
             format!(
                 r#"
                 /// Implementation of {method_name}
                 fn {function_name}(
                     &self,
                     _request: {input_type},
-                ) -> impl ::futures::Future<Output = ::anyhow::Result<{output_type}>> + Send;
+                ) -> {output_type} + Send;
             "#
             )
         })
@@ -233,37 +270,67 @@ fn get_server_nats_implementation(service: &Service) -> String {
             let function_subject = convert_method_to_subject(&method.name);
             let function_name = convert_method_to_function(&method.name);
             let input_type = &method.input_type;
-            format!(
-                r#"
-                Some(".{function_subject}") => {{
-                    let request = {input_type}::decode(message.payload)
-                        .context("failed to decode message payload as {input_type}")?;
-                    let reply = server
-                        .{function_name}(request)
-                        .await
-                        .context("failed to handle {input_type} request")?;
-                    if let Some(reply_to) = message.reply {{
-                        let mut buf = ::bytes::BytesMut::with_capacity(reply.encoded_len());
-                        reply
-                            .encode(&mut buf)
-                            .expect("to encode without reaching capacity");
-                        client
-                            .publish(reply_to, buf.into())
+            if method.server_streaming {
+                format!(
+                    r#"
+                    Some(".{function_subject}") => {{
+                        let request = {input_type}::decode(message.payload)
+                            .context("failed to decode message payload as {input_type}")?;
+                        let replies = server
+                            .{function_name}(request)
                             .await
-                            .context("failed to publish reply")?;
-                    }} else {{
-                        eprintln!("No reply subject found in message");
-                    }}
-                }},
-            "#
-            )
+                            .context("failed to handle {input_type} request")?;
+                        ::futures::pin_mut!(replies);
+                        if let Some(reply_to) = message.reply {{
+                            while let Some(reply) = replies.next().await {{
+                                let mut buf = ::bytes::BytesMut::with_capacity(reply.encoded_len());
+                                reply
+                                    .encode(&mut buf)
+                                    .expect("to encode without reaching capacity");
+                                client
+                                    .publish(reply_to.clone(), buf.into())
+                                    .await
+                                    .context("failed to publish reply")?;
+                            }}
+                        }} else {{
+                            eprintln!("No reply subject found in message");
+                        }}
+                    }},
+                "#
+                )
+            } else {
+                format!(
+                    r#"
+                    Some(".{function_subject}") => {{
+                        let request = {input_type}::decode(message.payload)
+                            .context("failed to decode message payload as {input_type}")?;
+                        let reply = server
+                            .{function_name}(request)
+                            .await
+                            .context("failed to handle {input_type} request")?;
+                        if let Some(reply_to) = message.reply {{
+                            let mut buf = ::bytes::BytesMut::with_capacity(reply.encoded_len());
+                            reply
+                                .encode(&mut buf)
+                                .expect("to encode without reaching capacity");
+                            client
+                                .publish(reply_to, buf.into())
+                                .await
+                                .context("failed to publish reply")?;
+                        }} else {{
+                            eprintln!("No reply subject found in message");
+                        }}
+                    }},
+                "#
+                )
+            }
         })
         .collect::<Vec<_>>()
         .join("\n");
 
     format!(
         r#"
-        // TODO: this could be a trait impl maybe?
+        // TODO: Consider this as a trait implementation for types that implement the Server trait
         #[allow(dead_code)]
         pub async fn start_server<S>(
             server: S,
