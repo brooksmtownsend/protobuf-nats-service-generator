@@ -1,0 +1,19 @@
+[package]
+name = "simple-stream"
+description = "A simple example of using the protobuf-nats-service-generator for streaming responses"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# Start: required dependencies for generated code
+anyhow = { version = "1" }
+async-nats = { version = "0.38" }
+bytes = { version = "1" }
+futures = { version = "0.3" }
+prost = { version = "0.13.4" }
+# End: required dependencies for generated code
+tokio = { version = "1", features = ["full"] }
+
+[build-dependencies]
+prost-build = { version = "0.13" }
+protobuf-nats-service-generator = { path = "../../", version = "0" }
