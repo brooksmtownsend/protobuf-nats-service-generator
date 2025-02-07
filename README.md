@@ -5,6 +5,15 @@
 
 This crate is responsible for generating `Server` and `Client` traits from protobuf service definitions, enabling simple client-side requests using [async-nats](https://crates.io/crates/async-nats) and implementing and handling server-side requests using a generated trait.
 
+## Feature support
+
+This crate aims to support all four kinds of [service definitions over NATS](https://grpc.io/docs/what-is-grpc/core-concepts/#service-definition). Currently it supports the following:
+
+- [x] Single request/response RPCs
+- [x] Server streaming RPCs
+- [ ] Client streaming RPCs
+- [ ] Bidirectional streaming RPCs
+
 ## Usage
 
 Add this crate's `protobuf_nats_service_generator::NatsServiceGenerator` to your `build.rs` file as a service generator. See the [prost_build](https://docs.rs/prost-build/latest/prost_build/) crate for more information on generating Rust types from .proto files.
