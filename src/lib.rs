@@ -40,7 +40,7 @@ use ::prost::Message;
 
 /// Filter methods, returning methods of the provided [MethodType]
 fn filter_methods_by_type(
-    methods: &Vec<prost_build::Method>,
+    methods: &[prost_build::Method],
     desired_type: MethodType,
 ) -> Vec<&prost_build::Method> {
     methods
