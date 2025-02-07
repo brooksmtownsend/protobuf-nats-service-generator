@@ -7,6 +7,10 @@ edition = "2021"
 license = "Apache-2.0"
 repository = "https://github.com/brooksmtownsend/protobuf-nats-service-generator"
 
+[features]
+default = ["auto_subject_prefix"]
+auto_subject_prefix = []
+
 [dependencies]
 convert_case = { version = "0.7" }
 prost-build = { version = "0.13", features = ["format"] }

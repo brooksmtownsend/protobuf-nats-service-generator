@@ -85,7 +85,7 @@ fn get_client_handlers_trait(service: &Service) -> String {
             /// "nats.proto" and can be overridden with your own implementation.
             /// 
             /// # Usage
-            /// For the default prefix, simply use the default implementation:
+            /// For the default prefix, enable the `auto_subject_feature` or implement the trait as:
             /// ```rust
             /// impl {name}ClientPrefix for async_nats::Client {{}}
             /// ```
@@ -147,6 +147,12 @@ fn get_client_nats_implementation(service: &Service) -> String {
         .collect::<Vec<_>>()
         .join("\n");
 
+    // If the feature is enabled, generate the default implementation for the client prefix
+    #[cfg(feature = "auto_subject_prefix")]
+    let client_prefix_impl = format!("impl {name}ClientPrefix for ::async_nats::Client {{}}");
+    #[cfg(not(feature = "auto_subject_prefix"))]
+    let client_prefix_impl = "";
+
     format!(
         r#"
         /// Implement the {name}Client trait for the async_nats::Client
@@ -165,6 +171,7 @@ fn get_client_nats_implementation(service: &Service) -> String {
         /// }}
         /// 
         /// ```
+        {client_prefix_impl}
         impl {name}Client for ::async_nats::Client where ::async_nats::Client: {name}ClientPrefix {{
             {functions}
         }}
