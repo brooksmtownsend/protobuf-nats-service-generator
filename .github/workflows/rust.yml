@@ -1,0 +1,43 @@
+name: Rust
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: true
+      - uses: arduino/setup-protoc@v3
+      - name: Build
+        run: cargo build
+      - name: Format check
+        run: cargo fmt -- --check
+      - name: Clippy check
+        run: cargo clippy -- -D warnings
+      - name: Run tests
+        run: cargo test
+  test-example:
+    runs-on: ubuntu-latest
+    services:
+      nats:
+        image: nats
+        ports:
+          - 4222:4222
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: true
+      - uses: arduino/setup-protoc@v3
+      - name: Run example
+        working-directory: examples/simple
+        run: cargo run
